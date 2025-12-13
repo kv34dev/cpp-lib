@@ -2,39 +2,46 @@
 #include <fstream>
 #include <vector>
 #include <string>
-#include <algorithm>
 #include <memory>
+#include <algorithm>
+#include <map>
+#include <stdexcept>
 
-// --- Базовый класс Книга ---
+// --------------------- БАЗОВЫЙ КЛАСС КНИГИ ---------------------
 class Book {
 protected:
     std::string title;
     std::string author;
     int year;
+    bool isBorrowed;
 
 public:
     Book(const std::string& t, const std::string& a, int y)
-        : title(t), author(a), year(y) {}
+        : title(t), author(a), year(y), isBorrowed(false) {}
 
     virtual ~Book() {}
 
     virtual void print() const {
         std::cout << "Название: " << title
                   << ", Автор: " << author
-                  << ", Год: " << year << std::endl;
+                  << ", Год: " << year
+                  << ", Взята: " << (isBorrowed ? "Да" : "Нет") << std::endl;
     }
 
-    virtual std::string serialize() const {
-        return title + ";" + author + ";" + std::to_string(year);
-    }
+    virtual std::string serialize() const = 0;
 
     const std::string& getTitle() const { return title; }
     const std::string& getAuthor() const { return author; }
+    int getYear() const { return year; }
+
+    void borrow() { isBorrowed = true; }
+    void returnBook() { isBorrowed = false; }
+    bool borrowed() const { return isBorrowed; }
 };
 
-// --- Класс научной книги ---
+// --------------------- НАУЧНАЯ КНИГА ---------------------
 class ScienceBook : public Book {
-    std::string field; // область науки
+    std::string field;
 
 public:
     ScienceBook(const std::string& t, const std::string& a, int y, const std::string& f)
@@ -46,13 +53,13 @@ public:
     }
 
     std::string serialize() const override {
-        return "ScienceBook;" + Book::serialize() + ";" + field;
+        return "ScienceBook;" + title + ";" + author + ";" + std::to_string(year) + ";" + field + ";" + (borrowed() ? "1" : "0");
     }
 };
 
-// --- Класс художественной книги ---
+// --------------------- ХУДОЖЕСТВЕННАЯ КНИГА ---------------------
 class FictionBook : public Book {
-    std::string genre; // жанр
+    std::string genre;
 
 public:
     FictionBook(const std::string& t, const std::string& a, int y, const std::string& g)
@@ -64,85 +71,162 @@ public:
     }
 
     std::string serialize() const override {
-        return "FictionBook;" + Book::serialize() + ";" + genre;
+        return "FictionBook;" + title + ";" + author + ";" + std::to_string(year) + ";" + genre + ";" + (borrowed() ? "1" : "0");
     }
 };
 
-// --- Класс библиотеки ---
+// --------------------- ПОЛЬЗОВАТЕЛЬ ---------------------
+class User {
+    std::string name;
+    int id;
+    std::vector<std::shared_ptr<Book>> borrowedBooks;
+
+public:
+    User(std::string n, int i) : name(n), id(i) {}
+
+    void borrowBook(const std::shared_ptr<Book>& book) {
+        if (book->borrowed()) {
+            throw std::runtime_error("Книга уже взята!");
+        }
+        book->borrow();
+        borrowedBooks.push_back(book);
+    }
+
+    void returnBook(const std::string& title) {
+        auto it = std::find_if(borrowedBooks.begin(), borrowedBooks.end(), [&](const std::shared_ptr<Book>& b) {
+            return b->getTitle() == title;
+        });
+        if (it != borrowedBooks.end()) {
+            (*it)->returnBook();
+            borrowedBooks.erase(it);
+        } else {
+            throw std::runtime_error("Пользователь не брал эту книгу!");
+        }
+    }
+
+    void printBorrowed() const {
+        std::cout << "Пользователь: " << name << ", ID: " << id << "\nВзятые книги:\n";
+        for (const auto& book : borrowedBooks) {
+            std::cout << "  - " << book->getTitle() << std::endl;
+        }
+    }
+
+    const std::string& getName() const { return name; }
+    int getId() const { return id; }
+};
+
+// --------------------- БИБЛИОТЕКА ---------------------
 class Library {
     std::vector<std::shared_ptr<Book>> books;
+    std::map<int, std::shared_ptr<User>> users;
 
 public:
     void addBook(const std::shared_ptr<Book>& book) {
         books.push_back(book);
     }
 
-    void showAll() const {
+    void addUser(const std::shared_ptr<User>& user) {
+        users[user->getId()] = user;
+    }
+
+    void showAllBooks() const {
         for (const auto& book : books) {
             book->print();
             std::cout << "---------------------\n";
         }
     }
 
-    void searchByAuthor(const std::string& author) const {
-        bool found = false;
-        for (const auto& book : books) {
-            if (book->getAuthor() == author) {
-                book->print();
-                std::cout << "---------------------\n";
-                found = true;
-            }
+    void showAllUsers() const {
+        for (const auto& [id, user] : users) {
+            user->printBorrowed();
+            std::cout << "---------------------\n";
         }
-        if (!found) std::cout << "Книг автора \"" << author << "\" не найдено.\n";
     }
 
-    void saveToFile(const std::string& filename) const {
-        std::ofstream out(filename);
-        if (!out) {
-            std::cerr << "Ошибка открытия файла для записи.\n";
-            return;
-        }
+    std::shared_ptr<Book> findBook(const std::string& title) const {
         for (const auto& book : books) {
-            out << book->serialize() << "\n";
+            if (book->getTitle() == title) return book;
         }
+        return nullptr;
+    }
+
+    void borrowBook(int userId, const std::string& title) {
+        auto userIt = users.find(userId);
+        if (userIt == users.end()) throw std::runtime_error("Пользователь не найден!");
+        auto book = findBook(title);
+        if (!book) throw std::runtime_error("Книга не найдена!");
+        userIt->second->borrowBook(book);
+    }
+
+    void returnBook(int userId, const std::string& title) {
+        auto userIt = users.find(userId);
+        if (userIt == users.end()) throw std::runtime_error("Пользователь не найден!");
+        userIt->second->returnBook(title);
+    }
+
+    void sortBooksByTitle() {
+        std::sort(books.begin(), books.end(), [](const std::shared_ptr<Book>& a, const std::shared_ptr<Book>& b) {
+            return a->getTitle() < b->getTitle();
+        });
+    }
+
+    void saveToBinaryFile(const std::string& filename) {
+        std::ofstream out(filename, std::ios::binary);
+        if (!out) throw std::runtime_error("Ошибка при открытии файла для записи");
+
+        size_t count = books.size();
+        out.write(reinterpret_cast<char*>(&count), sizeof(count));
+
+        for (auto& book : books) {
+            std::string serialized = book->serialize();
+            size_t len = serialized.size();
+            out.write(reinterpret_cast<char*>(&len), sizeof(len));
+            out.write(serialized.c_str(), len);
+        }
+
         out.close();
-        std::cout << "Библиотека сохранена в файл \"" << filename << "\"\n";
     }
 
-    void loadFromFile(const std::string& filename) {
-        std::ifstream in(filename);
-        if (!in) {
-            std::cerr << "Ошибка открытия файла для чтения.\n";
-            return;
-        }
+    void loadFromBinaryFile(const std::string& filename) {
+        std::ifstream in(filename, std::ios::binary);
+        if (!in) throw std::runtime_error("Ошибка при открытии файла для чтения");
 
-        books.clear(); // очищаем библиотеку перед загрузкой
+        books.clear();
 
-        std::string line;
-        while (std::getline(in, line)) {
+        size_t count;
+        in.read(reinterpret_cast<char*>(&count), sizeof(count));
+
+        for (size_t i = 0; i < count; ++i) {
+            size_t len;
+            in.read(reinterpret_cast<char*>(&len), sizeof(len));
+            std::string serialized(len, '\0');
+            in.read(&serialized[0], len);
+
             std::vector<std::string> parts;
             size_t pos = 0;
-            while ((pos = line.find(';')) != std::string::npos) {
-                parts.push_back(line.substr(0, pos));
-                line.erase(0, pos + 1);
+            std::string temp = serialized;
+            while ((pos = temp.find(';')) != std::string::npos) {
+                parts.push_back(temp.substr(0, pos));
+                temp.erase(0, pos + 1);
             }
-            parts.push_back(line); // последний элемент
+            parts.push_back(temp);
 
-            if (parts.size() < 4) continue;
-
-            if (parts[0] == "ScienceBook" && parts.size() == 5) {
-                books.push_back(std::make_shared<ScienceBook>(parts[1], parts[2], std::stoi(parts[3]), parts[4]));
-            } else if (parts[0] == "FictionBook" && parts.size() == 5) {
-                books.push_back(std::make_shared<FictionBook>(parts[1], parts[2], std::stoi(parts[3]), parts[4]));
+            if (parts[0] == "ScienceBook" && parts.size() == 6) {
+                auto b = std::make_shared<ScienceBook>(parts[1], parts[2], std::stoi(parts[3]), parts[4]);
+                if (parts[5] == "1") b->borrow();
+                books.push_back(b);
+            } else if (parts[0] == "FictionBook" && parts.size() == 6) {
+                auto b = std::make_shared<FictionBook>(parts[1], parts[2], std::stoi(parts[3]), parts[4]);
+                if (parts[5] == "1") b->borrow();
+                books.push_back(b);
             }
         }
 
         in.close();
-        std::cout << "Библиотека загружена из файла \"" << filename << "\"\n";
     }
 };
 
-// --- Главная функция ---
+// --------------------- ГЛАВНАЯ ФУНКЦИЯ ---------------------
 int main() {
     Library lib;
 
@@ -152,20 +236,40 @@ int main() {
     lib.addBook(std::make_shared<ScienceBook>("Химия и жизнь", "Сидоров", 2012, "Химия"));
     lib.addBook(std::make_shared<FictionBook>("Мир фантазий", "Иванов", 2020, "Фэнтези"));
 
-    std::cout << "Все книги в библиотеке:\n";
-    lib.showAll();
+    // Добавляем пользователей
+    lib.addUser(std::make_shared<User>("Алексей", 1));
+    lib.addUser(std::make_shared<User>("Мария", 2));
 
-    std::cout << "\nПоиск книг автора 'Иванов':\n";
-    lib.searchByAuthor("Иванов");
+    std::cout << "Все книги:\n";
+    lib.showAllBooks();
 
-    // Сохраняем в файл
-    lib.saveToFile("library.txt");
+    // Пользователи берут книги
+    try {
+        lib.borrowBook(1, "Физика для всех");
+        lib.borrowBook(2, "Мир фантазий");
+    } catch (const std::exception& e) {
+        std::cerr << e.what() << std::endl;
+    }
 
-    // Создаем новую библиотеку и загружаем из файла
+    std::cout << "\nСостояние пользователей после выдачи книг:\n";
+    lib.showAllUsers();
+
+    // Сохраняем библиотеку в бинарный файл
+    try {
+        lib.saveToBinaryFile("library.dat");
+    } catch (const std::exception& e) {
+        std::cerr << e.what() << std::endl;
+    }
+
+    // Загружаем из бинарного файла в новую библиотеку
     Library lib2;
-    lib2.loadFromFile("library.txt");
-    std::cout << "\nЗагруженная библиотека:\n";
-    lib2.showAll();
+    try {
+        lib2.loadFromBinaryFile("library.dat");
+        std::cout << "\nЗагруженная библиотека:\n";
+        lib2.showAllBooks();
+    } catch (const std::exception& e) {
+        std::cerr << e.what() << std::endl;
+    }
 
     return 0;
 }
